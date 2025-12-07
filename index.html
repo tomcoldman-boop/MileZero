@@ -154,6 +154,21 @@
       color: #8b949e;
     }
 
+    /* Role-specific header tints */
+    #view-shipper .view-header {
+      background: #111827; /* slightly lighter blue-ish */
+      border-radius: 12px;
+      padding: 12px 16px;
+      border: 1px solid #1f2937;
+    }
+
+    #view-haulier .view-header {
+      background: #020617; /* slightly darker blue-ish */
+      border-radius: 12px;
+      padding: 12px 16px;
+      border: 1px solid #111827;
+    }
+
     .btn {
       display: inline-flex;
       align-items: center;
@@ -337,22 +352,24 @@
         </div>
       </div>
       <div class="split-cta">
+        <!-- Shipper card -->
         <div class="card" onclick="showView('shipper')">
-          <h2>I need transport</h2>
-          <p>Retailers, manufacturers &amp; 3PLs posting live loads to RDCs and depots.</p>
+          <h2>Shipper View</h2>
+          <p>Request transport services on MileZero°</p>
           <div>
-            <span class="pill">Post chilled / frozen / ambient</span>
+            <span class="pill">Chilled / frozen / ambient</span>
             <span class="pill">Set time windows</span>
             <span class="pill">Invite bids</span>
           </div>
         </div>
+        <!-- Haulier card -->
         <div class="card" onclick="showView('haulier')">
-          <h2>I have vehicles</h2>
-          <p>Hauliers and fleet operators finding backloads and filling empty running.</p>
+          <h2>Haulier View</h2>
+          <p>Search MileZero° for work that matches your location and equipment</p>
           <div>
-            <span class="pill">Search by lane</span>
-            <span class="pill">Filter by trailer type</span>
-            <span class="pill">Advertise empty legs</span>
+            <span class="pill">Input Base Location</span>
+            <span class="pill">Search by Temperature</span>
+            <span class="pill">Sort by driving time</span>
           </div>
         </div>
       </div>
@@ -363,8 +380,8 @@
   <section id="view-shipper" class="view hidden">
     <div class="view-header">
       <div>
-        <h1>Post a load</h1>
-        <small>Create a live job for vetted hauliers in the MileZero° network.</small>
+        <h1>Shipper View</h1>
+        <small>Request transport services on MileZero°</small>
       </div>
       <button class="btn secondary" onclick="showView('haulier')">Switch to haulier view</button>
     </div>
@@ -453,8 +470,8 @@
   <section id="view-haulier" class="view hidden">
     <div class="view-header">
       <div>
-        <h1>Find loads</h1>
-        <small>Search MileZero° loads that match your lanes and equipment.</small>
+        <h1>Haulier View</h1>
+        <small>Search MileZero° for work that matches your location and equipment.</small>
       </div>
       <button class="btn secondary" onclick="showView('shipper')">Switch to shipper view</button>
     </div>
@@ -628,13 +645,11 @@
         target_rate: 650,
         status: 'Open',
 
-        // Approximate real coordinates for the postcodes
         pickup_lat: 53.753724,
         pickup_lng: -1.737594,
         delivery_lat: 51.521373,
         delivery_lng: 0.140346,
 
-        // Pre-filled direct route info (so it works even if Google routing fails)
         main_route_info: {
           distance: '~320 km',
           eta: '~4h 0m'
