@@ -699,6 +699,7 @@
     allLoads = demoLoads;
   }
   // ---------------------------------------------------------------
+
   function renderLoadsForShipper(){
     const c=document.getElementById('shipper-load-list');
     if (!c) return;
@@ -717,7 +718,7 @@
           <span class="status">${l.status||'Open'}</span>
         </div>
         <div class="li-actions">
-          <button class="btn secondary" type="button" onclick="openLoadDetail('${l.id}')">Open</button>
+          <button class="btn secondary" type="button" onclick="openLoadDetail('${l.id}')">Load details</button>
         </div>
       </div>`).join('');
   }
@@ -820,6 +821,11 @@
           ? '£' + l.target_rate.toFixed(0)
           : '–';
 
+      const yourQuoteText =
+        typeof l.my_quote === 'number'
+          ? 'Your quote: £' + l.my_quote.toFixed(0)
+          : '';
+
       return `
       <div class="list-item">
         <div class="li-main">
@@ -828,10 +834,14 @@
           <div class="li-meta">
             Total Driving: ${escapeHtml(combinedDistanceText)} · ETA: ${escapeHtml(combinedEtaText)}
           </div>
-          <div class="li-meta">Price: ${escapeHtml(priceText)}</div>
+          <div class="li-meta">
+            Price: ${escapeHtml(priceText)}
+            ${yourQuoteText ? ' · ' + escapeHtml(yourQuoteText) : ''}
+          </div>
         </div>
         <div class="li-actions">
-          <button class="btn" type="button" onclick="openLoadDetail('${l.id}')">Open</button>
+          <button class="btn" type="button" onclick="openLoadDetail('${l.id}')">Load details</button>
+          <button class="btn secondary" type="button" onclick="submitQuote('${l.id}')">Quote</button>
         </div>
       </div>`;
     }).join('');
@@ -1142,6 +1152,33 @@
     }
   }
 
+  function submitQuote(id) {
+    const load = allLoads.find(l => String(l.id) === String(id));
+    if (!load) {
+      alert('Load not found.');
+      return;
+    }
+
+    const input = prompt('Enter your quote price (£):', load.my_quote != null ? load.my_quote : (load.target_rate || ''));
+    if (input === null) return;
+
+    const value = Number(input);
+    if (!isFinite(value) || value <= 0) {
+      alert('Please enter a valid positive number.');
+      return;
+    }
+
+    load.my_quote = value;
+    alert('Quote submitted: £' + value.toFixed(0));
+
+    renderLoadsForHaulier();
+    renderLoadsForShipper();
+
+    if (selectedLoadId && String(selectedLoadId) === String(id)) {
+      openLoadDetail(id);
+    }
+  }
+
   async function openLoadDetail(id){
     const load = allLoads.find(l => String(l.id) === String(id));
     if (!load) {
@@ -1164,6 +1201,11 @@
       typeof load.target_rate === 'number'
         ? '£' + load.target_rate.toFixed(0)
         : 'Not set';
+
+    const yourQuoteText =
+      typeof load.my_quote === 'number'
+        ? 'Your quote: £' + load.my_quote.toFixed(0)
+        : '';
 
     const deadheadLine = load.deadhead_info
       ? `You → Collection: ${escapeHtml(load.deadhead_info.distance)} · ETA: ${escapeHtml(load.deadhead_info.eta)}`
@@ -1195,7 +1237,10 @@
       `<div class="li-meta">Total Driving: ${escapeHtml(totalDistStr)} ${escapeHtml(totalEtaStr)}</div>` +
       `<div class="li-meta">Collection: ${escapeHtml(pickupCode)}</div>` +
       `<div class="li-meta">Delivery: ${escapeHtml(deliveryCode)}</div>` +
-      `<div class="li-meta">Price: ${escapeHtml(priceText)}</div>` +
+      `<div class="li-meta">
+         Price: ${escapeHtml(priceText)}
+         ${yourQuoteText ? ' · ' + escapeHtml(yourQuoteText) : ''}
+       </div>` +
       `<div class="li-meta">${deadheadLine}</div>` +
       `<div class="li-meta">${mainRouteLine}</div>` +
       `<div class="li-meta">${deliveryBaseLine}</div>` +
