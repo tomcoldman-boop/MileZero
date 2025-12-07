@@ -704,8 +704,40 @@
     const c=document.getElementById('shipper-load-list');
     if (!c) return;
     const active=allLoads;
-    if(active.length===0){c.innerHTML='<div class="li-meta">No loads yet. Post your first MileZero° load above.</div>';return;}
-    c.innerHTML=active.map(l=>`
+    if(active.length===0){
+      c.innerHTML='<div class="li-meta">No loads yet. Post your first MileZero° load above.</div>';
+      return;
+    }
+
+    c.innerHTML=active.map(l=>{
+      const quoteStatusReadable =
+        l.quote_status === 'accepted'
+          ? 'Accepted'
+          : l.quote_status === 'declined'
+            ? 'Declined'
+            : (typeof l.my_quote === 'number' ? 'Pending' : null);
+
+      const quoteLine =
+        typeof l.my_quote === 'number'
+          ? `<div class="li-meta">Quote received: £${escapeHtml(l.my_quote.toFixed(0))}${quoteStatusReadable ? ' · Status: ' + escapeHtml(quoteStatusReadable) : ''}</div>`
+          : '';
+
+      let actionsHtml = `<button class="btn secondary" type="button" onclick="openLoadDetail('${l.id}')">Load details</button>`;
+
+      if (typeof l.my_quote === 'number') {
+        if (!l.quote_status || l.quote_status === 'pending') {
+          actionsHtml += `
+            <button class="btn" type="button" onclick="acceptQuote('${l.id}')">Accept</button>
+            <button class="btn secondary" type="button" onclick="declineQuote('${l.id}')">Decline</button>
+          `;
+        } else if (l.quote_status === 'accepted') {
+          actionsHtml += `<span class="li-meta">Quote accepted</span>`;
+        } else if (l.quote_status === 'declined') {
+          actionsHtml += `<span class="li-meta">Quote declined</span>`;
+        }
+      }
+
+      return `
       <div class="list-item">
         <div class="li-main">
           <strong>${escapeHtml(l.pickup_location)} → ${escapeHtml(l.delivery_location)}</strong>
@@ -715,12 +747,14 @@
             ${escapeHtml(l.load_type||'')} ·
             ${escapeHtml(l.trailer_type||'')}
           </div>
+          ${quoteLine}
           <span class="status">${l.status||'Open'}</span>
         </div>
         <div class="li-actions">
-          <button class="btn secondary" type="button" onclick="openLoadDetail('${l.id}')">Load details</button>
+          ${actionsHtml}
         </div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
   }
 
   function kmOrInfinity(val) {
@@ -821,9 +855,16 @@
           ? '£' + l.target_rate.toFixed(0)
           : '–';
 
+      const statusReadable =
+        l.quote_status === 'accepted'
+          ? 'Accepted'
+          : l.quote_status === 'declined'
+            ? 'Declined'
+            : (typeof l.my_quote === 'number' ? 'Pending' : null);
+
       const yourQuoteText =
         typeof l.my_quote === 'number'
-          ? 'Your quote: £' + l.my_quote.toFixed(0)
+          ? `Your quote: £${l.my_quote.toFixed(0)}${statusReadable ? ' (' + escapeHtml(statusReadable) + ')' : ''}`
           : '';
 
       return `
@@ -836,7 +877,7 @@
           </div>
           <div class="li-meta">
             Price: ${escapeHtml(priceText)}
-            ${yourQuoteText ? ' · ' + escapeHtml(yourQuoteText) : ''}
+            ${yourQuoteText ? ' · ' + yourQuoteText : ''}
           </div>
         </div>
         <div class="li-actions">
@@ -1169,11 +1210,48 @@
     }
 
     load.my_quote = value;
+    load.quote_status = 'pending'; // reset to pending if they change it
     alert('Quote submitted: £' + value.toFixed(0));
 
     renderLoadsForHaulier();
     renderLoadsForShipper();
 
+    if (selectedLoadId && String(selectedLoadId) === String(id)) {
+      openLoadDetail(id);
+    }
+  }
+
+  function acceptQuote(id) {
+    const load = allLoads.find(l => String(l.id) === String(id));
+    if (!load) {
+      alert('Load not found.');
+      return;
+    }
+    if (typeof load.my_quote !== 'number') {
+      alert('No quote to accept for this load.');
+      return;
+    }
+    load.quote_status = 'accepted';
+    alert('Quote accepted.');
+    renderAll();
+    if (selectedLoadId && String(selectedLoadId) === String(id)) {
+      openLoadDetail(id);
+    }
+  }
+
+  function declineQuote(id) {
+    const load = allLoads.find(l => String(l.id) === String(id));
+    if (!load) {
+      alert('Load not found.');
+      return;
+    }
+    if (typeof load.my_quote !== 'number') {
+      alert('No quote to decline for this load.');
+      return;
+    }
+    load.quote_status = 'declined';
+    alert('Quote declined.');
+    renderAll();
     if (selectedLoadId && String(selectedLoadId) === String(id)) {
       openLoadDetail(id);
     }
@@ -1202,9 +1280,16 @@
         ? '£' + load.target_rate.toFixed(0)
         : 'Not set';
 
+    const statusReadable =
+      load.quote_status === 'accepted'
+        ? 'Accepted'
+        : load.quote_status === 'declined'
+          ? 'Declined'
+          : (typeof load.my_quote === 'number' ? 'Pending' : null);
+
     const yourQuoteText =
       typeof load.my_quote === 'number'
-        ? 'Your quote: £' + load.my_quote.toFixed(0)
+        ? 'Your quote: £' + load.my_quote.toFixed(0) + (statusReadable ? ' (' + statusReadable + ')' : '')
         : '';
 
     const deadheadLine = load.deadhead_info
@@ -1237,10 +1322,8 @@
       `<div class="li-meta">Total Driving: ${escapeHtml(totalDistStr)} ${escapeHtml(totalEtaStr)}</div>` +
       `<div class="li-meta">Collection: ${escapeHtml(pickupCode)}</div>` +
       `<div class="li-meta">Delivery: ${escapeHtml(deliveryCode)}</div>` +
-      `<div class="li-meta">
-         Price: ${escapeHtml(priceText)}
-         ${yourQuoteText ? ' · ' + escapeHtml(yourQuoteText) : ''}
-       </div>` +
+      `<div class="li-meta">Price: ${escapeHtml(priceText)}</div>` +
+      (yourQuoteText ? `<div class="li-meta">${escapeHtml(yourQuoteText)}</div>` : '') +
       `<div class="li-meta">${deadheadLine}</div>` +
       `<div class="li-meta">${mainRouteLine}</div>` +
       `<div class="li-meta">${deliveryBaseLine}</div>` +
