@@ -626,7 +626,21 @@
         pallet_count: 26,
         weight_kg: 24000,
         target_rate: 650,
-        status: 'Open'
+        status: 'Open',
+
+        // Approximate real coordinates for the postcodes
+        pickup_lat: 53.753724,
+        pickup_lng: -1.737594,
+        delivery_lat: 51.521373,
+        delivery_lng: 0.140346,
+
+        // Pre-filled direct route info (so it works even if Google routing fails)
+        main_route_info: {
+          distance: '~320 km',
+          eta: '~4h 0m'
+        },
+        main_route_km: 320,
+        main_route_secs: 4 * 3600
       },
       {
         id: 'demo-2',
@@ -640,7 +654,19 @@
         pallet_count: 40,
         weight_kg: 26000,
         target_rate: 780,
-        status: 'Open'
+        status: 'Open',
+
+        pickup_lat: 53.639009,
+        pickup_lng: -2.124815,
+        delivery_lat: 52.599032,
+        delivery_lng: -1.189747,
+
+        main_route_info: {
+          distance: '~190 km',
+          eta: '~2h 15m'
+        },
+        main_route_km: 190,
+        main_route_secs: (2 * 3600) + (15 * 60)
       },
       {
         id: 'demo-3',
@@ -654,23 +680,25 @@
         pallet_count: 26,
         weight_kg: 22000,
         target_rate: 600,
-        status: 'Open'
+        status: 'Open',
+
+        pickup_lat: 53.534306,
+        pickup_lng: -2.173976,
+        delivery_lat: 51.516994,
+        delivery_lng: -2.689071,
+
+        main_route_info: {
+          distance: '~275 km',
+          eta: '~3h 10m'
+        },
+        main_route_km: 275,
+        main_route_secs: (3 * 3600) + (10 * 60)
       }
     ];
-
-    demoLoads.forEach(l => {
-      const p = fakeGeocode(l.pickup_location);
-      const d = fakeGeocode(l.delivery_location);
-      l.pickup_lat = p.lat;
-      l.pickup_lng = p.lng;
-      l.delivery_lat = d.lat;
-      l.delivery_lng = d.lng;
-    });
 
     allLoads = demoLoads;
   }
   // ---------------------------------------------------------------
-
   function renderLoadsForShipper(){
     const c=document.getElementById('shipper-load-list');
     if (!c) return;
