@@ -1,5 +1,3 @@
-MileZero v16
-
 <script>
   const USE_BACKEND = false;
   let allLoads = [];
