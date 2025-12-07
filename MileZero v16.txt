@@ -1,0 +1,709 @@
+MileZero v16
+
+<script>
+  const USE_BACKEND = false;
+  let allLoads = [];
+
+  const haulierFilter = {
+    temperature: 'Any',
+    trailer: 'Any',
+    maxPallets: null,
+    maxWeightKg: null
+  };
+  let sortOption = 'default';
+
+  let map;
+  let mapMarkers = [];
+  let mainRoutePolyline = null;
+  let deadheadPolyline = null;
+  let directionsService = null;
+
+  let userLocation = null;
+  let userMarker = null;
+
+  let baseCoords = null;
+  let baseLocationString = '';
+
+  let selectedLoadId = null;
+
+  function showView(name) {
+    document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
+    const el = document.getElementById('view-' + name);
+    if (el) el.classList.remove('hidden');
+    window.scrollTo(0, 0);
+  }
+
+  function backToHaulier(){
+    showView('haulier');
+  }
+
+  function escapeHtml(str) {
+    if (str == null) return '';
+    return String(str)
+      .replace(/&/g,'&amp;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;')
+      .replace(/'/g,'&#039;');
+  }
+
+  function parseNumberFromText(text) {
+    if (!text) return null;
+    const cleaned = String(text).replace(/,/g,'');
+    const m = cleaned.match(/[\d.]+/);
+    return m ? Number(m[0]) : null;
+  }
+
+  async function geocodeAddress(address) {
+    const url =
+      'https://maps.googleapis.com/maps/api/geocode/json?address=' +
+      encodeURIComponent(address) +
+      '&region=uk&key=AIzaSyB09BZbYfyLs4cFe9Vr98OV3PQ3QaeJIPA';
+
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (data.status === 'OK' && data.results.length > 0) {
+      return data.results[0].geometry.location;
+    } else {
+      throw new Error('Geocoding failed: ' + data.status);
+    }
+  }
+
+  function fakeGeocode(text) {
+    const s=(text||'').toLowerCase();
+    let hash=0;
+    for(let i=0;i<s.length;i++){hash=(hash*31+s.charCodeAt(i))&0xffffffff;}
+    const minLat=50, maxLat=56, minLng=-5.5, maxLng=1.5;
+    const lat=minLat+(Math.abs(hash)%1000)/1000*(maxLat-minLat);
+    const lng=minLng+(Math.abs(hash>>1)%1000)/1000*(maxLng-minLng);
+    return {lat,lng};
+  }
+
+  // ---------- NEW: seed 3 default loads on every page load ----------
+  function seedDemoLoads() {
+    // Avoid duplicating if we ever call this again in the same session
+    if (allLoads.length > 0) return;
+
+    const demoLoads = [
+      {
+        id: 'demo-1',
+        pickup_location: 'BD4 6SE – Wakefield DC',
+        delivery_location: 'RM9 6BF – Dagenham RDC',
+        pickup_window: '24/11/2025 08:00-10:00',
+        delivery_window: '24/11/2025 14:00-15:00',
+        load_type: 'Chilled',
+        trailer_type: 'Single-deck fridge',
+        pallets: '26 pallets',
+        pallet_count: 26,
+        weight_kg: 24000,
+        target_rate: 650,
+        status: 'Open'
+      },
+      {
+        id: 'demo-2',
+        pickup_location: 'OL12 9QJ – Northern DC',
+        delivery_location: 'LE19 1SW – Midlands RDC',
+        pickup_window: '25/11/2025 06:00-08:00',
+        delivery_window: '25/11/2025 11:00-12:00',
+        load_type: 'Frozen',
+        trailer_type: 'Double-deck fridge',
+        pallets: '40 pallets',
+        pallet_count: 40,
+        weight_kg: 26000,
+        target_rate: 780,
+        status: 'Open'
+      },
+      {
+        id: 'demo-3',
+        pickup_location: 'M24 1RU – Manchester DC',
+        delivery_location: 'BS11 9FG – Avonmouth RDC',
+        pickup_window: '26/11/2025 09:00-11:00',
+        delivery_window: '26/11/2025 15:00-17:00',
+        load_type: 'Ambient',
+        trailer_type: 'Curtainsider',
+        pallets: '26 pallets',
+        pallet_count: 26,
+        weight_kg: 22000,
+        target_rate: 600,
+        status: 'Open'
+      }
+    ];
+
+    // Give each demo load coordinates using the fakeGeocode helper
+    demoLoads.forEach(l => {
+      const p = fakeGeocode(l.pickup_location);
+      const d = fakeGeocode(l.delivery_location);
+      l.pickup_lat = p.lat;
+      l.pickup_lng = p.lng;
+      l.delivery_lat = d.lat;
+      l.delivery_lng = d.lng;
+    });
+
+    allLoads = demoLoads;
+  }
+  // ---------------------------------------------------------------
+
+  function renderLoadsForShipper(){
+    const c=document.getElementById('shipper-load-list');
+    const active=allLoads;
+    if(active.length===0){c.innerHTML='<div class="li-meta">No loads yet. Post your first MileZero° load above.</div>';return;}
+    c.innerHTML=active.map(l=>`
+      <div class="list-item">
+        <div class="li-main">
+          <strong>${escapeHtml(l.pickup_location)} → ${escapeHtml(l.delivery_location)}</strong>
+          <div class="li-meta">
+            ${escapeHtml(l.pickup_window)} ·
+            ${escapeHtml(l.pallets||'')} ·
+            ${escapeHtml(l.load_type||'')} ·
+            ${escapeHtml(l.trailer_type||'')}
+          </div>
+          <span class="status">${l.status||'Open'}</span>
+        </div>
+        <div class="li-actions">
+          <button class="btn secondary" type="button" onclick="openLoadDetail('${l.id}')">Open</button>
+        </div>
+      </div>`).join('');
+  }
+
+  function kmOrInfinity(val) {
+    return (typeof val === 'number' && isFinite(val)) ? val : Infinity;
+  }
+
+  function combinedKm(load) {
+    const a = typeof load.deadhead_km === 'number' ? load.deadhead_km : 0;
+    const b = typeof load.main_route_km === 'number' ? load.main_route_km : 0;
+    const c = typeof load.delivery_to_base_km === 'number' ? load.delivery_to_base_km : 0;
+    if (a === 0 && b === 0 && c === 0) return null;
+    return a + b + c;
+  }
+
+  function totalDurationSeconds(load) {
+    let s = 0;
+    if (typeof load.deadhead_secs === 'number') s += load.deadhead_secs;
+    if (typeof load.main_route_secs === 'number') s += load.main_route_secs;
+    if (typeof load.delivery_to_base_secs === 'number') s += load.delivery_to_base_secs;
+    return s || null;
+  }
+
+  function formatDistanceKm(km) {
+    if (km == null) return '–';
+    const rounded = Math.round(km * 10) / 10;
+    return rounded + ' km';
+  }
+
+  function formatDurationFromSeconds(seconds) {
+    if (seconds == null) return 'N/A';
+    const mins = Math.round(seconds / 60);
+    if (mins < 60) return mins + ' mins';
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return m ? `${h}h ${m}m` : `${h}h`;
+  }
+
+  function extractLocationCode(str) {
+    if (!str) return '';
+    const beforeDash = str.split(/[–-]/)[0].trim();
+    return beforeDash;
+  }
+
+  function renderLoadsForHaulier(){
+    const c=document.getElementById('haulier-load-list');
+
+    if (!baseCoords) {
+      c.innerHTML = '<div class="li-meta">Enter your base postcode above and press Search to see matching loads.</div>';
+      return;
+    }
+
+    let filtered=allLoads.filter(l=>{
+      const tempOk = haulierFilter.temperature==='Any' || (l.load_type||'').toLowerCase()===haulierFilter.temperature.toLowerCase();
+      const trailerOk = haulierFilter.trailer==='Any' || (l.trailer_type||'').toLowerCase().includes(haulierFilter.trailer.toLowerCase());
+
+      const palletsOk =
+        haulierFilter.maxPallets == null ||
+        l.pallet_count == null ||
+        l.pallet_count <= haulierFilter.maxPallets;
+
+      const weightOk =
+        haulierFilter.maxWeightKg == null ||
+        l.weight_kg == null ||
+        l.weight_kg <= haulierFilter.maxWeightKg;
+
+      return tempOk && trailerOk && palletsOk && weightOk;
+    });
+
+    if (sortOption === 'deadhead') {
+      filtered = filtered.slice().sort((a,b) => {
+        return kmOrInfinity(a.deadhead_km) - kmOrInfinity(b.deadhead_km);
+      });
+    } else if (sortOption === 'combined') {
+      filtered = filtered.slice().sort((a,b) => {
+        const ak = combinedKm(a);
+        const bk = combinedKm(b);
+        if (ak == null && bk == null) return 0;
+        if (ak == null) return 1;
+        if (bk == null) return -1;
+        return ak - bk;
+      });
+    }
+
+    if(filtered.length===0){
+      c.innerHTML='<div class="li-meta">No matching loads for this base / filter. Try widening your criteria.</div>';
+      return;
+    }
+
+    c.innerHTML=filtered.map(l=>{
+      const totalKm = combinedKm(l);
+      const totalSecs = totalDurationSeconds(l);
+      const combinedDistanceText = formatDistanceKm(totalKm);
+      const combinedEtaText = formatDurationFromSeconds(totalSecs);
+
+      const priceText =
+        typeof l.target_rate === 'number'
+          ? '£' + l.target_rate.toFixed(0)
+          : '–';
+
+      return `
+      <div class="list-item">
+        <div class="li-main">
+          <strong>Collection: ${escapeHtml(l.pickup_location)}</strong>
+          <div class="li-meta">Delivery: ${escapeHtml(l.delivery_location)}</div>
+          <div class="li-meta">
+            Total Driving: ${escapeHtml(combinedDistanceText)} · ETA: ${escapeHtml(combinedEtaText)}
+          </div>
+          <div class="li-meta">Price: ${escapeHtml(priceText)}</div>
+        </div>
+        <div class="li-actions">
+          <button class="btn" type="button" onclick="openLoadDetail('${l.id}')">Open</button>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  function renderAll(){renderLoadsForShipper();renderLoadsForHaulier();}
+
+  function validateDateTimeWindow(v){
+    if(!v) return false;
+    const re=/^([0-2][0-9]|3[0-1])\/(0[1-9]|1[0-2])\/(\d{4})\s+([0-1][0-9]|2[0-3]):([0-5][0-9])\s*-\s*([0-1][0-9]|2[0-3]):([0-5][0-9])$/;
+    return re.test(v.trim());
+  }
+
+  async function publishLoad(){
+    const pickup=document.getElementById('pickup-input').value.trim();
+    const delivery=document.getElementById('delivery-input').value.trim();
+    const pickupWindow=document.getElementById('pickup-window-input').value.trim();
+    const deliveryWindow=document.getElementById('delivery-window-input').value.trim();
+    if(!pickup || !delivery){alert('Please enter pickup and delivery.');return;}
+    if(!validateDateTimeWindow(pickupWindow) || !validateDateTimeWindow(deliveryWindow)){
+      alert('Date/time windows must be in format DD/MM/YYYY HH:MM-HH:MM');return;
+    }
+
+    const palletsText = document.getElementById('pallets-input').value.trim();
+    const weightText = document.getElementById('weight-input').value.trim();
+    const targetRateText = document.getElementById('target-rate-input').value;
+
+    const payload={
+      id:Date.now().toString(),
+      pickup_location:pickup,
+      delivery_location:delivery,
+      pickup_window:pickupWindow,
+      delivery_window:deliveryWindow,
+      load_type:document.getElementById('load-type-input').value,
+      trailer_type:document.getElementById('trailer-type-input').value,
+      pallets:palletsText,
+      pallet_count: parseNumberFromText(palletsText),
+      weight_kg: parseNumberFromText(weightText),
+      target_rate: targetRateText ? Number(targetRateText) : null,
+      status:'Open'
+    };
+
+    let p, d;
+    try {
+      p = await geocodeAddress(pickup);
+      d = await geocodeAddress(delivery);
+    } catch (err) {
+      console.warn('Geocoding failed, falling back to fake coords', err);
+      p = fakeGeocode(pickup);
+      d = fakeGeocode(delivery);
+    }
+
+    payload.pickup_lat=p.lat; payload.pickup_lng=p.lng;
+    payload.delivery_lat=d.lat; payload.delivery_lng=d.lng;
+
+    allLoads.unshift(payload);
+    document.getElementById('shipper-form').reset();
+    renderAll();
+    refreshRouteInfoForAllLoads();
+    alert('Load published.');
+  }
+
+  async function applyHaulierFilters(){
+    const baseInput = document.getElementById('haulier-base');
+    const maxPalletsInput = document.getElementById('haulier-max-pallets');
+    const maxWeightInput = document.getElementById('haulier-max-weight');
+    const sortSel = document.getElementById('haulier-sort');
+
+    baseLocationString = baseInput.value.trim();
+    if (!baseLocationString) {
+      baseCoords = null;
+      renderLoadsForHaulier();
+      alert('Please enter your base postcode before searching for loads.');
+      return;
+    }
+
+    haulierFilter.trailer = document.getElementById('haulier-trailer').value;
+    haulierFilter.temperature = document.getElementById('haulier-temp').value;
+    haulierFilter.maxPallets = maxPalletsInput.value ? Number(maxPalletsInput.value) : null;
+    haulierFilter.maxWeightKg = maxWeightInput.value ? Number(maxWeightInput.value) : null;
+    sortOption = sortSel ? sortSel.value : 'default';
+
+    try {
+      baseCoords = await geocodeAddress(baseLocationString);
+    } catch (err) {
+      console.warn('Base geocoding failed', err);
+      alert('Could not geocode that base location. Please check the postcode.');
+      baseCoords = null;
+      renderLoadsForHaulier();
+      return;
+    }
+
+    await refreshRouteInfoForAllLoads();
+  }
+
+  function clearMapOverlays(){
+    if(!map) return;
+    mapMarkers.forEach(m=>m.setMap(null)); mapMarkers=[];
+    if(mainRoutePolyline){mainRoutePolyline.setMap(null); mainRoutePolyline=null;}
+    if(deadheadPolyline){deadheadPolyline.setMap(null); deadheadPolyline=null;}
+  }
+
+  function getRoute(origin, destination) {
+    return new Promise((resolve) => {
+      if (!directionsService) { resolve(null); return; }
+      directionsService.route(
+        {
+          origin,
+          destination,
+          travelMode: google.maps.TravelMode.DRIVING,
+          drivingOptions: {
+            departureTime: new Date(),
+            trafficModel: google.maps.TrafficModel.BEST_GUESS || 'best_guess'
+          }
+        },
+        (res, status) => {
+          if (status === 'OK' && res.routes && res.routes.length > 0) {
+            resolve(res.routes[0]);
+          } else {
+            console.warn('Route failed:', status, res);
+            resolve(null);
+          }
+        }
+      );
+    });
+  }
+
+  async function computeRouteInfoForLoad(load) {
+    if (!directionsService) return;
+    if (typeof load.pickup_lat !== 'number' || typeof load.delivery_lat !== 'number') return;
+
+    const pickupPos = { lat: load.pickup_lat, lng: load.pickup_lng };
+    const deliveryPos = { lat: load.delivery_lat, lng: load.delivery_lng };
+
+    // pickup -> delivery
+    const mainRoute = await getRoute(pickupPos, deliveryPos);
+    if (mainRoute && mainRoute.legs && mainRoute.legs.length > 0) {
+      const leg = mainRoute.legs[0];
+      const distText = leg.distance && leg.distance.text ? leg.distance.text : '';
+      const baseSecs = leg.duration_in_traffic && typeof leg.duration_in_traffic.value === 'number'
+        ? leg.duration_in_traffic.value
+        : (leg.duration && typeof leg.duration.value === 'number' ? leg.duration.value : null);
+      const etaText =
+        leg.duration_in_traffic && leg.duration_in_traffic.text
+          ? leg.duration_in_traffic.text
+          : (leg.duration && leg.duration.text ? leg.duration.text : '');
+
+      if (distText && etaText) {
+        load.main_route_info = { distance: distText, eta: etaText };
+        load.main_route_km = leg.distance && typeof leg.distance.value === 'number'
+          ? leg.distance.value / 1000
+          : null;
+        load.main_route_secs = baseSecs;
+      }
+    }
+
+    // you -> pickup
+    if (userLocation) {
+      const deadRoute = await getRoute(userLocation, pickupPos);
+      if (deadRoute && deadRoute.legs && deadRoute.legs.length > 0) {
+        const leg = deadRoute.legs[0];
+        const distText = leg.distance && leg.distance.text ? leg.distance.text : '';
+        const baseSecs = leg.duration_in_traffic && typeof leg.duration_in_traffic.value === 'number'
+          ? leg.duration_in_traffic.value
+          : (leg.duration && typeof leg.duration.value === 'number' ? leg.duration.value : null);
+        const etaText =
+          leg.duration_in_traffic && leg.duration_in_traffic.text
+            ? leg.duration_in_traffic.text
+            : (leg.duration && leg.duration.text ? leg.duration.text : '');
+
+        if (distText && etaText) {
+          load.deadhead_info = { distance: distText, eta: etaText };
+          load.deadhead_km = leg.distance && typeof leg.distance.value === 'number'
+            ? leg.distance.value / 1000
+            : null;
+          load.deadhead_secs = baseSecs;
+        }
+      }
+    }
+
+    // delivery -> base
+    if (baseCoords) {
+      const baseRoute = await getRoute(deliveryPos, baseCoords);
+      if (baseRoute && baseRoute.legs && baseRoute.legs.length > 0) {
+        const leg = baseRoute.legs[0];
+        const distText = leg.distance && leg.distance.text ? leg.distance.text : '';
+        const baseSecs = leg.duration_in_traffic && typeof leg.duration_in_traffic.value === 'number'
+          ? leg.duration_in_traffic.value
+          : (leg.duration && typeof leg.duration.value === 'number' ? leg.duration.value : null);
+        const etaText =
+          leg.duration_in_traffic && leg.duration_in_traffic.text
+            ? leg.duration_in_traffic.text
+            : (leg.duration && leg.duration.text ? leg.duration.text : '');
+
+        if (distText && etaText) {
+          load.delivery_to_base_info = { distance: distText, eta: etaText };
+          load.delivery_to_base_km = leg.distance && typeof leg.distance.value === 'number'
+            ? leg.distance.value / 1000
+            : null;
+          load.delivery_to_base_secs = baseSecs;
+        }
+      }
+    }
+  }
+
+  async function refreshRouteInfoForAllLoads() {
+    if (!directionsService) {
+      renderLoadsForHaulier();
+      return;
+    }
+    const loadsCopy = [...allLoads];
+    for (const l of loadsCopy) {
+      await computeRouteInfoForLoad(l);
+    }
+    renderLoadsForHaulier();
+  }
+
+  function showLoadOnMap(load){
+    if(!map){return;}
+    if(typeof load.pickup_lat!=='number' || typeof load.delivery_lat!=='number'){
+      return;
+    }
+
+    const pickupPos={lat:load.pickup_lat,lng:load.pickup_lng};
+    const deliveryPos={lat:load.delivery_lat,lng:load.delivery_lng};
+
+    clearMapOverlays();
+
+    mapMarkers.push(new google.maps.Marker({position:pickupPos,map,label:'C',title:load.pickup_location}));
+    mapMarkers.push(new google.maps.Marker({position:deliveryPos,map,label:'D',title:load.delivery_location}));
+
+    const bounds = new google.maps.LatLngBounds();
+    bounds.extend(pickupPos);
+    bounds.extend(deliveryPos);
+    if (userLocation) bounds.extend(userLocation);
+    if (baseCoords) bounds.extend(baseCoords);
+
+    if (!directionsService) {
+      map.fitBounds(bounds, 80);
+      return;
+    }
+
+    // main route
+    getRoute(pickupPos, deliveryPos).then(route => {
+      if (route) {
+        if (mainRoutePolyline) mainRoutePolyline.setMap(null);
+        mainRoutePolyline = new google.maps.Polyline({
+          map,
+          path: route.overview_path,
+          strokeOpacity: 0.9
+        });
+
+        if (route.bounds) bounds.union(route.bounds);
+
+        if (route.legs && route.legs.length > 0) {
+          const leg = route.legs[0];
+          const distText = leg.distance && leg.distance.text ? leg.distance.text : '';
+          const baseSecs = leg.duration_in_traffic && typeof leg.duration_in_traffic.value === 'number'
+            ? leg.duration_in_traffic.value
+            : (leg.duration && typeof leg.duration.value === 'number' ? leg.duration.value : null);
+          const etaText =
+            leg.duration_in_traffic && leg.duration_in_traffic.text
+              ? leg.duration_in_traffic.text
+              : (leg.duration && leg.duration.text ? leg.duration.text : '');
+
+          if (distText && etaText) {
+            load.main_route_info = { distance: distText, eta: etaText };
+            load.main_route_km = leg.distance && typeof leg.distance.value === 'number'
+              ? leg.distance.value / 1000
+              : null;
+            load.main_route_secs = baseSecs;
+          }
+        }
+      }
+
+      map.fitBounds(bounds, 80);
+    });
+
+    // deadhead (you -> collection)
+    if (userLocation) {
+      getRoute(userLocation, pickupPos).then(route => {
+        if (route) {
+          if (deadheadPolyline) deadheadPolyline.setMap(null);
+          deadheadPolyline = new google.maps.Polyline({
+            map,
+            path: route.overview_path,
+            strokeOpacity: 0.9,
+            strokeColor: '#4285F4',
+            strokeWeight: 4
+          });
+
+          if (route.legs && route.legs.length > 0) {
+            const leg = route.legs[0];
+            const distText = leg.distance && leg.distance.text ? leg.distance.text : '';
+            const baseSecs = leg.duration_in_traffic && typeof leg.duration_in_traffic.value === 'number'
+              ? leg.duration_in_traffic.value
+              : (leg.duration && typeof leg.duration.value === 'number' ? leg.duration.value : null);
+            const etaText =
+              leg.duration_in_traffic && leg.duration_in_traffic.text
+                ? leg.duration_in_traffic.text
+                : (leg.duration && leg.duration.text ? leg.duration.text : '');
+
+            if (distText && etaText) {
+              load.deadhead_info = { distance: distText, eta: etaText };
+              load.deadhead_km = leg.distance && typeof leg.distance.value === 'number'
+                ? leg.distance.value / 1000
+                : null;
+              load.deadhead_secs = baseSecs;
+            }
+          }
+        }
+      });
+    }
+  }
+
+  async function openLoadDetail(id){
+    const load = allLoads.find(l => String(l.id) === String(id));
+    if (!load) {
+      alert('Load not found.');
+      return;
+    }
+    selectedLoadId = id;
+
+    await computeRouteInfoForLoad(load);
+
+    const pickupCode = extractLocationCode(load.pickup_location).toUpperCase();
+    const deliveryCode = extractLocationCode(load.delivery_location).toUpperCase();
+
+    const totalKm = combinedKm(load);
+    const totalSecs = totalDurationSeconds(load);
+    const totalDistStr = formatDistanceKm(totalKm);
+    const totalEtaStr = formatDurationFromSeconds(totalSecs);
+
+    const priceText =
+      typeof load.target_rate === 'number'
+        ? '£' + load.target_rate.toFixed(0)
+        : 'Not set';
+
+    const deadheadLine = load.deadhead_info
+      ? `You → Collection: ${escapeHtml(load.deadhead_info.distance)} · ETA: ${escapeHtml(load.deadhead_info.eta)}`
+      : 'You → Collection: N/A';
+
+    const mainRouteLine = load.main_route_info
+      ? `Collection → Delivery: ${escapeHtml(load.main_route_info.distance)} · ETA: ${escapeHtml(load.main_route_info.eta)}`
+      : 'Collection → Delivery: N/A';
+
+    const deliveryBaseLine = load.delivery_to_base_info
+      ? `Delivery → Base: ${escapeHtml(load.delivery_to_base_info.distance)} · ETA: ${escapeHtml(load.delivery_to_base_info.eta)}`
+      : 'Delivery → Base: N/A';
+
+    const pickupWindowLine = 'Pickup Window: ' + escapeHtml(load.pickup_window || 'N/A');
+    const deliveryWindowLine = 'Delivery Window: ' + escapeHtml(load.delivery_window || 'N/A');
+
+    const palletsValue =
+      load.pallet_count != null
+        ? String(load.pallet_count)
+        : (load.pallets || 'N/A');
+    const palletsLine = 'No. of pallets: ' + escapeHtml(palletsValue);
+
+    const loadTypeLine = 'Load Type: ' + escapeHtml(load.load_type || 'N/A');
+    const trailerTypeLine = 'Trailer Type: ' + escapeHtml(load.trailer_type || 'N/A');
+
+    const summaryEl = document.getElementById('detail-summary');
+
+    summaryEl.innerHTML =
+      `<div class="li-meta">Total Driving: ${escapeHtml(totalDistStr)} ${escapeHtml(totalEtaStr)}</div>` +
+      `<div class="li-meta">Collection: ${escapeHtml(pickupCode)}</div>` +
+      `<div class="li-meta">Delivery: ${escapeHtml(deliveryCode)}</div>` +
+      `<div class="li-meta">Price: ${escapeHtml(priceText)}</div>` +
+      `<div class="li-meta">${deadheadLine}</div>` +
+      `<div class="li-meta">${mainRouteLine}</div>` +
+      `<div class="li-meta">${deliveryBaseLine}</div>` +
+      `<div class="li-meta">${pickupWindowLine}</div>` +
+      `<div class="li-meta">${deliveryWindowLine}</div>` +
+      `<div class="li-meta">${palletsLine}</div>` +
+      `<div class="li-meta">${loadTypeLine}</div>` +
+      `<div class="li-meta">${trailerTypeLine}</div>`;
+
+    const routesEl = document.getElementById('detail-routes');
+    if (routesEl) routesEl.innerHTML = '';
+
+    showView('haulier-detail');
+
+    showLoadOnMap(load);
+  }
+
+  window.initMap = function () {
+    const mapEl=document.getElementById('detail-map');
+    if(!mapEl) return;
+    map=new google.maps.Map(mapEl,{
+      center:{lat:53.8,lng:-1.6},
+      zoom:6,
+      disableDefaultUI:true,
+      zoomControl:true
+    });
+    directionsService = new google.maps.DirectionsService();
+
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          userLocation = {
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude
+          };
+          if (userMarker) userMarker.setMap(null);
+          userMarker = new google.maps.Marker({
+            position: userLocation,
+            map,
+            title: 'Your location',
+            icon: {
+              url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png'
+            }
+          });
+          map.setCenter(userLocation);
+          map.setZoom(9);
+        },
+        (err) => {
+          console.warn('Geolocation error:', err);
+        },
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+    } else {
+      console.warn('Geolocation not supported in this browser.');
+    }
+  };
+
+  // 🔄 UPDATED: seed demo loads then render on DOM ready
+  window.addEventListener('DOMContentLoaded', () => {
+    seedDemoLoads();
+    renderAll();
+  });
+</script>
